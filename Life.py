@@ -59,6 +59,8 @@ class LifeBoard(Canvas):
             print(f'zoomed: {self.zoom_level = }')
             x = self.canvasx(event.x)
             y = self.canvasy(event.y)
+            rounded_x, rounded_y, _, _ = self.round_coords(x, y)
+            x, y = rounded_x, rounded_y
             self.factor = 1.001 ** event.delta
             self.drawing_factor *= self.factor
             self.scale(ALL, x, y, self.factor, self.factor)
