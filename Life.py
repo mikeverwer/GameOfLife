@@ -35,28 +35,27 @@ class LifeBoard(Canvas):
                 canvas_args[key] = value       
         super().__init__(parent, **canvas_args)
 
-        self.grid_spacing = 20
+        self.playing = False
+        self.grid_spacing = 16
         self.cells: dict[int: Cell] = {}
+        self.cells_to_activate: dict[int: Cell] = {}
         self.do_binds()
         self.starting_config()
 
     
     def starting_config(self):
         event = Event()
-        event.x = 420; event.y = 420
+        s = self.grid_spacing
+        event.x = s; event.y = s
         self.clicked(event)
-        event.x = 440; event.y = 420
+        event.x = 2 * s; event.y = s
         self.clicked(event)
-        event.x = 460; event.y = 420
+        event.x = 3 * s; event.y = s
         self.clicked(event)
-        event.x = 460; event.y = 400
+        event.x = 3 * s; event.y = 0
         self.clicked(event)
-        event.x = 440; event.y = 380
+        event.x = 2 * s; event.y = -1 * s
         self.clicked(event)
-        # self.clicked((0, 20))
-        # self.clicked((0, 40))
-        # self.clicked((20, 40))
-        # self.clicked((20, 60))
 
     def handle_kwarg(self, key, value):
         if key == "pan" and value:
@@ -65,7 +64,7 @@ class LifeBoard(Canvas):
             self.make_zoomable = True
 
     def do_binds(self):
-        self.bind("<Control-Button-1>", self.give_coords)
+        self.bind("<Button-3>", self.alt_clicked)
         if self.make_zoomable:
             self.bind("<MouseWheel>", self.do_zoom) # WINDOWS ONLY
         if self.make_pannable:
@@ -94,27 +93,41 @@ class LifeBoard(Canvas):
         elif self.zoom_level < self.min_zoom:
             self.zoom_level = self.min_zoom
 
+    def alt_clicked(self, event):
+        x, y = self.canvasx(event.x), self.canvasy(event.y)
+        x0, y0, x1, y1 = self.round_coords(x, y)
+        print(f"\n(x0, y0) = ({x0}, {y0})")
+        # check for cell
+        clicked_cell_id = None
+        try:
+            clicked_cell_id = self.find_withtag(f'x{x0}&&y{y0}')[0]
+        except Exception as e:
+            pass
+        if clicked_cell_id:
+            clicked_cell: Cell = self.cells[clicked_cell_id]
+            print(clicked_cell)
+
     def clicked(self, event):
         x, y = self.canvasx(event.x), self.canvasy(event.y)
         x0, y0, x1, y1 = self.round_coords(x, y)
         print(f"\n(x0, y0) = ({x0}, {y0})")
         # check for cell
-        clicked_cell = None
+        clicked_cell_id = None
         try:
-            clicked_cell = self.find_withtag(f'x{x0}&&y{y0}')[0]
+            clicked_cell_id = self.find_withtag(f'x{x0}&&y{y0}')[0]
         except Exception as e:
-            print('no existing cell')
             pass
-        print(f'{clicked_cell}')
-        if clicked_cell:
+        print(f'{clicked_cell_id = }')
+        if clicked_cell_id:
             print('clicked an existing cell')
-            clicked_cell: Cell = self.cells[clicked_cell]
+            clicked_cell: Cell = self.cells[clicked_cell_id]
             clicked_cell.activate()
-            print(clicked_cell)
         else:
+            print('no existing cell', end=" ")
             new_cell = Cell(self, x0, y0, x1, y1)
             new_cell.activate()
             self.cells[new_cell.id] = new_cell
+            print(f"created cell {new_cell.id}")
     
     def round_coords(self, x, y):
         scaled_size = self.grid_spacing * self.drawing_factor
@@ -122,25 +135,25 @@ class LifeBoard(Canvas):
         x1, y1 = x0 + scaled_size, y0 + scaled_size
         return x0, y0, x1, y1  
 
-    def prime_cells_for_update(self): 
+    def prime_cells_for_update(self):
+        self.cells_to_activate = {} 
         for id, cell in self.cells.items():
             cell: Cell
             cell.next_generation()
 
     def update_cells(self):
         _cells = self.cells.copy()
-        for id, cell in _cells.items():
+        for id, cell in self.cells_to_activate.items():
             cell: Cell
-            if cell.activate_next:
-                cell.activate()
+            cell.activate()
     
     def update_board(self):
-        self.after(1, self.prime_cells_for_update)
-        self.after(1, self.update_cells)
+        self.after(100, self.prime_cells_for_update)
+        self.after(10, self.update_cells)
 
     def schedule_update_board(self):
-        self.after(1000 // 64, self.update_board)
-        self.schedule_update_board()
+        self.after(200, self.update_board)
+        self.after(200, self.schedule_update_board)
 
 
 class Cell:
@@ -156,13 +169,14 @@ class Cell:
         self.grid_location = (x0, y0)
         self.id = self.board.create_rectangle(x0, y0, x1, y1, tags=(f"x{x0}", f"y{y0}"), outline=self.OUTLINE_COLOUR, width=self.OUTLINE_WIDTH)
         # self.board.create_text(text=f'{self.id}', x=self.grid_location[0], y=self.grid_location[1])
-        self.board.bind(self.id, self.activate)
         self.neighbourhood_region = self.get_neighbourhood()
-        self.neighbours: tuple = ()
+        self.neighbours: list = []; self.find_neighbours()
+        # self.board.tag_bind(self.id, "<Button-1>", lambda event: self.activate())
+        self.board.tag_bind(self.id, "<Button-3>", lambda event: self.__repr__())
         # self.next_generation()  # sets self.next_state
 
     def __repr__(self) -> str:
-        return str(self.id)
+        return f"Class: Cell\n  ID={self.id}\n  status={'alive' if self.alive else 'dead'}\n  co-ord={self.grid_location}\n  neighbours={[neighbour.id for neighbour in self.neighbours]}\n  living-neighbours={self.find_living_neighbours()}\n  next-gen={self.next_generation()}"
     
     def __eq__(self, value: object) -> bool:
         return self.id == value
@@ -185,29 +199,39 @@ class Cell:
 
     def find_neighbours(self):
         # deprecated
-        self.neighbours = self.board.find_enclosed(*self.neighbourhood_region)
-        return
-    
-    def find_living_neighbours(self):
-        self.living_neighbours = 0
-        for neighbour in self.neighbours:
-            neighbour_cell: Cell = self.board.cells[neighbour]
-            if neighbour_cell.alive:
-                self.living_neighbours += 1
+        # self.neighbours = self.board.find_enclosed(*self.neighbourhood_region)
+
+        # search by tags
+        x, y = self.grid_location[0], self.grid_location[1]
+        delta = self.board.grid_spacing
+        self.neighbours: list = []  # __|__i________________________
+        for i in range(-1, 2):      # j | (-1, -1)  (0, -1)  (1, -1)
+            for j in range(-1, 2):  #   | (-1,  0)  (SELF )  (1,  0)
+                if i == j == 0:     #   | (-1,  1)  (0,  1)  (1,  1) 
+                    pass
+                else:
+                    try:
+                        search_results = self.board.find_withtag(f'x{x + (i * delta)}&&y{y + (j * delta)}')
+                        existing_cell_id = search_results[0]
+                        existing_cell = self.board.cells[existing_cell_id]
+                        self.neighbours.append(existing_cell)
+                    except Exception as e:
+                        # print(f"{self.id=}, {i=}, {j=}  :  {e}")
+                        pass
+        return self.neighbours
 
     def build_neighbours(self):
         x, y = self.grid_location[0], self.grid_location[1]
         delta = self.board.grid_spacing
         self.neighbours: list = []
-        for i in range(-1, 2):
-            for j in range(-1, 2):
-                if i == j == 0:
+        for i in range(-1, 2):      # (-1, -1)  (0, -1)  (1, -1)
+            for j in range(-1, 2):  # (-1,  0)  (SELF )  (1,  0)
+                if i == j == 0:     # (-1,  1)  (0,  1)  (1,  1) 
                     pass
                 elif self.board.find_withtag(f'x{x + (i * delta)}&&y{y + (j * delta)}'):
-                    existing_cell = self.board.find_withtag(f'x{x + (i * delta)}&&y{y + (j * delta)}')[0]
-                    existing_cell = self.board.cells[existing_cell]
+                    existing_cell_id = self.board.find_withtag(f'x{x + (i * delta)}&&y{y + (j * delta)}')[0]
+                    existing_cell = self.board.cells[existing_cell_id]
                     self.neighbours.append(existing_cell)
-                    pass
                 else:
                     coords = self.board.round_coords(x + (i * delta), y + (j * delta))
                     new_cell = Cell(self.board, *coords)
@@ -215,20 +239,30 @@ class Cell:
                     self.neighbours.append(new_cell)
         self.neighbours = set(self.neighbours)
         self.neighbours = list(self.neighbours)
-        print(self.neighbours)
-        return
+        for neighbor in self.neighbours:
+            neighbor.find_neighbours()
+    
+    def find_living_neighbours(self):
+        self.living_neighbours = 0
+        for neighbour in self.neighbours:
+            if neighbour.alive:
+                self.living_neighbours += 1
+        return self.living_neighbours
     
     def next_generation(self):
         self.find_living_neighbours()
         if self.alive:
             if self.living_neighbours in [2, 3]:
-                self.activate_next = False
+                return True   # will survive
             else:
-                self.activate_next = True
+                self.board.cells_to_activate[self.id] = self
+                return False  # will die
         else:
             if self.living_neighbours == 3:
-                self.activate_next = True
-        return
+                self.board.cells_to_activate[self.id] = self
+                return True   # will be born
+            else:
+                return False  # will remain dead
 
 
 
@@ -263,6 +297,11 @@ class GameOfLife(Tk):
         window_height = self.winfo_height()
         x_pos = (screen_width - window_width) // 2
         self.geometry(f"+{x_pos}+25")
+        # center view 
+        self.update()
+        center_x = (self.board.winfo_width() // 2) - (2 * self.board.grid_spacing)
+        center_y = self.board.winfo_height() // 2
+        self.board.scan_dragto(x=center_x, y=center_y, gain=1)
 
     
     def build_window(self, scrollbars, scrollregion, pan, zoom):
@@ -280,7 +319,7 @@ class GameOfLife(Tk):
         control_panel.grid(row=0, column=0, sticky=('nsew'))
 
         self.board = LifeBoard(mainframe, background='white', pan=pan, zoom=zoom, bg='#dcdcdc')
-        self.board.config(scrollregion=self.board.bbox("all"))
+        # self.board.config(scrollregion=self.board.bbox("all"))
         self.board.grid(row=0, column=1, sticky=(N, E, S, W))
         self.board.rowconfigure(0, weight=1)
         self.board.columnconfigure(0, weight=1)
@@ -309,7 +348,7 @@ class GameOfLife(Tk):
         content_frame = ttk.Frame(frame)
         content_frame.grid(row=1, column=0, sticky=(N, S))
 
-        next_step_button = ttk.Button(content_frame, text='Next', command=self.board.update_board)
+        next_step_button = ttk.Button(content_frame, text='Next', command=self.board.schedule_update_board)
         next_step_button.grid()
         
         return
