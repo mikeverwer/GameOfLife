@@ -8,9 +8,14 @@ ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("SimulationDefault
 
 
 def main():
-    app = GameOfLife(pan='y', zoom='y')
+    app = GameOfLife(pan='y')
     app.mainloop()
 
+
+class CFrame(ttk.Frame):
+    def __init__(self, parent, **kwargs):
+        style = ttk.Style()
+        super().__init__(parent, **kwargs)
 
 class LifeBoard(Canvas):
     def __init__(self, parent, **kwargs):
@@ -29,7 +34,29 @@ class LifeBoard(Canvas):
             else:
                 canvas_args[key] = value       
         super().__init__(parent, **canvas_args)
+
+        self.grid_spacing = 20
+        self.cells: dict[int: Cell] = {}
         self.do_binds()
+        self.starting_config()
+
+    
+    def starting_config(self):
+        event = Event()
+        event.x = 420; event.y = 420
+        self.clicked(event)
+        event.x = 440; event.y = 420
+        self.clicked(event)
+        event.x = 460; event.y = 420
+        self.clicked(event)
+        event.x = 460; event.y = 400
+        self.clicked(event)
+        event.x = 440; event.y = 380
+        self.clicked(event)
+        # self.clicked((0, 20))
+        # self.clicked((0, 40))
+        # self.clicked((20, 40))
+        # self.clicked((20, 60))
 
     def handle_kwarg(self, key, value):
         if key == "pan" and value:
@@ -70,22 +97,138 @@ class LifeBoard(Canvas):
     def clicked(self, event):
         x, y = self.canvasx(event.x), self.canvasy(event.y)
         x0, y0, x1, y1 = self.round_coords(x, y)
-        print(f"(x0, y0) = ({x0}, {y0})")
-        self.create_rectangle((x0, y0, x1, y1), fill='RoyalBlue')
+        print(f"\n(x0, y0) = ({x0}, {y0})")
+        # check for cell
+        clicked_cell = None
+        try:
+            clicked_cell = self.find_withtag(f'x{x0}&&y{y0}')[0]
+        except Exception as e:
+            print('no existing cell')
+            pass
+        print(f'{clicked_cell}')
+        if clicked_cell:
+            print('clicked an existing cell')
+            clicked_cell: Cell = self.cells[clicked_cell]
+            clicked_cell.activate()
+            print(clicked_cell)
+        else:
+            new_cell = Cell(self, x0, y0, x1, y1)
+            new_cell.activate()
+            self.cells[new_cell.id] = new_cell
     
     def round_coords(self, x, y):
-        scaled_size = 20 * self.drawing_factor
+        scaled_size = self.grid_spacing * self.drawing_factor
         x0, y0 = (x // scaled_size) * scaled_size, (y // scaled_size) * scaled_size
         x1, y1 = x0 + scaled_size, y0 + scaled_size
-        return x0, y0, x1, y1   
+        return x0, y0, x1, y1  
+
+    def prime_cells_for_update(self): 
+        for id, cell in self.cells.items():
+            cell: Cell
+            cell.next_generation()
+
+    def update_cells(self):
+        _cells = self.cells.copy()
+        for id, cell in _cells.items():
+            cell: Cell
+            if cell.activate_next:
+                cell.activate()
+    
+    def update_board(self):
+        self.after(1, self.prime_cells_for_update)
+        self.after(1, self.update_cells)
+
+    def schedule_update_board(self):
+        self.after(1000 // 64, self.update_board)
+        self.schedule_update_board()
 
 
-class cell:
+class Cell:
     board: LifeBoard = None
+    FILL_COLOUR = '#0047ab'  # cobalt blue
+    OUTLINE_COLOUR = 'black'  # "#dcdcdc"
+    OUTLINE_WIDTH = 2
 
-    def __init__(self, bottom_left):
-        self.state = 0
+    def __init__(self, board, x0, y0, x1, y1, **kwargs):
+        self.board: LifeBoard = board
+        self.alive: bool = False
+        self.activate_next: bool = False
+        self.grid_location = (x0, y0)
+        self.id = self.board.create_rectangle(x0, y0, x1, y1, tags=(f"x{x0}", f"y{y0}"), outline=self.OUTLINE_COLOUR, width=self.OUTLINE_WIDTH)
+        # self.board.create_text(text=f'{self.id}', x=self.grid_location[0], y=self.grid_location[1])
+        self.board.bind(self.id, self.activate)
+        self.neighbourhood_region = self.get_neighbourhood()
+        self.neighbours: tuple = ()
+        # self.next_generation()  # sets self.next_state
+
+    def __repr__(self) -> str:
+        return str(self.id)
+    
+    def __eq__(self, value: object) -> bool:
+        return self.id == value
         
+    def __hash__(self) -> int:
+        return hash(self.id)
+
+    def activate(self):
+        self.alive = not self.alive
+        fill = self.FILL_COLOUR if self.alive else ''
+        self.board.itemconfig(self.id, fill=fill)
+        if len(self.neighbours) < 8:
+            self.build_neighbours()
+
+    def get_neighbourhood(self):
+        # deprecated
+        x, y = self.grid_location[0], self.grid_location[1]
+        delta = self.board.grid_spacing + 1
+        return (x - delta, y - (2 * delta), x + (2 * delta), y + delta + 2)
+
+    def find_neighbours(self):
+        # deprecated
+        self.neighbours = self.board.find_enclosed(*self.neighbourhood_region)
+        return
+    
+    def find_living_neighbours(self):
+        self.living_neighbours = 0
+        for neighbour in self.neighbours:
+            neighbour_cell: Cell = self.board.cells[neighbour]
+            if neighbour_cell.alive:
+                self.living_neighbours += 1
+
+    def build_neighbours(self):
+        x, y = self.grid_location[0], self.grid_location[1]
+        delta = self.board.grid_spacing
+        self.neighbours: list = []
+        for i in range(-1, 2):
+            for j in range(-1, 2):
+                if i == j == 0:
+                    pass
+                elif self.board.find_withtag(f'x{x + (i * delta)}&&y{y + (j * delta)}'):
+                    existing_cell = self.board.find_withtag(f'x{x + (i * delta)}&&y{y + (j * delta)}')[0]
+                    existing_cell = self.board.cells[existing_cell]
+                    self.neighbours.append(existing_cell)
+                    pass
+                else:
+                    coords = self.board.round_coords(x + (i * delta), y + (j * delta))
+                    new_cell = Cell(self.board, *coords)
+                    self.board.cells[new_cell.id] = new_cell
+                    self.neighbours.append(new_cell)
+        self.neighbours = set(self.neighbours)
+        self.neighbours = list(self.neighbours)
+        print(self.neighbours)
+        return
+    
+    def next_generation(self):
+        self.find_living_neighbours()
+        if self.alive:
+            if self.living_neighbours in [2, 3]:
+                self.activate_next = False
+            else:
+                self.activate_next = True
+        else:
+            if self.living_neighbours == 3:
+                self.activate_next = True
+        return
 
 
 
@@ -123,6 +266,8 @@ class GameOfLife(Tk):
 
     
     def build_window(self, scrollbars, scrollregion, pan, zoom):
+        self.set_styles()
+
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
@@ -134,7 +279,7 @@ class GameOfLife(Tk):
         control_panel = ttk.Frame(mainframe)
         control_panel.grid(row=0, column=0, sticky=('nsew'))
 
-        self.board = LifeBoard(mainframe, background='white', pan=pan, zoom=zoom)
+        self.board = LifeBoard(mainframe, background='white', pan=pan, zoom=zoom, bg='#dcdcdc')
         self.board.config(scrollregion=self.board.bbox("all"))
         self.board.grid(row=0, column=1, sticky=(N, E, S, W))
         self.board.rowconfigure(0, weight=1)
@@ -149,10 +294,7 @@ class GameOfLife(Tk):
             self.sim_Vscrollbar.grid(row=0, column=2, sticky=(N, S))
             self.board['yscrollcommand'] = self.sim_Vscrollbar.set
 
-
         self.build_control_panel(control_panel)
-
-        return
     
 
     def build_control_panel(self, control_panel):
@@ -166,8 +308,27 @@ class GameOfLife(Tk):
 
         content_frame = ttk.Frame(frame)
         content_frame.grid(row=1, column=0, sticky=(N, S))
+
+        next_step_button = ttk.Button(content_frame, text='Next', command=self.board.update_board)
+        next_step_button.grid()
         
         return
+    
+    def set_styles(self):
+        style = ttk.Style()
+        self.mode = 'dark'
+        bg = '#eeeeee' if self.mode == 'light' else '#252525'
+        style_args = {
+            'background': bg,
+            'foreground': 'white'
+        }
+        widget_names = [
+            "TButton", "TCheckbutton", "TRadiobutton", "TEntry", "TLabel", 
+            "TCombobox", "TSpinbox", "TScale", "TProgressbar", "Treeview", 
+            "Notebook", "TFrame", "TLabelFrame"
+        ]
+        for widget in widget_names:
+            style.configure(widget, **style_args)
 
 
     def update_game(self):
