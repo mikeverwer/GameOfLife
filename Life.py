@@ -12,17 +12,13 @@ def main():
     app.mainloop()
 
 
-class CFrame(ttk.Frame):
-    def __init__(self, parent, **kwargs):
-        style = ttk.Style()
-        super().__init__(parent, **kwargs)
-
 class LifeBoard(Canvas):
     def __init__(self, parent, **kwargs):
-        self.parent = parent
+        self.parent: GameOfLife = parent
         canvas_args: dict = {}
         self.make_pannable = False
         self.make_zoomable = False
+        self.log_widget: Text = None
         self.max_zoom = 1
         self.min_zoom = -3
         self.factor = 1
@@ -36,32 +32,36 @@ class LifeBoard(Canvas):
         super().__init__(parent, **canvas_args)
 
         self.playing = False
+        frames_per_second = 4
+        self.update_interval = 1000 // frames_per_second  # frames per second
         self.grid_spacing = 16
         self.cells: dict[int: Cell] = {}
         self.cells_to_activate: dict[int: Cell] = {}
         self.do_binds()
-        self.starting_config()
-
-    
-    def starting_config(self):
-        event = Event()
-        s = self.grid_spacing
-        event.x = s; event.y = s
-        self.clicked(event)
-        event.x = 2 * s; event.y = s
-        self.clicked(event)
-        event.x = 3 * s; event.y = s
-        self.clicked(event)
-        event.x = 3 * s; event.y = 0
-        self.clicked(event)
-        event.x = 2 * s; event.y = -1 * s
-        self.clicked(event)
+        self.saved_configuration = self.starting_config()
+        self.draw_configuration()
 
     def handle_kwarg(self, key, value):
         if key == "pan" and value:
             self.make_pannable = True
         elif key == "zoom" and value:
             self.make_zoomable = True
+        elif key == 'logger' and value:
+            self.log_widget = value
+    
+    def starting_config(self):
+        event = Event()
+        s = self.grid_spacing
+        config = [(s, s), (2*s, s), (3*s, s), (3*s, 0), (2*s, -1*s)]
+        return config
+
+    def draw_configuration(self, config:list=None):
+        if config is None:
+            config = self.saved_configuration
+        for point in config:
+            event = Event()
+            event.x = point[0]; event.y = point[1]
+            self.clicked(event, recursive=True)
 
     def do_binds(self):
         self.bind("<Button-3>", self.alt_clicked)
@@ -75,14 +75,14 @@ class LifeBoard(Canvas):
     def give_coords(self, event):
         canvasx = self.canvasx(event.x)
         canvasy = self.canvasy(event.y)
-        print(f"Canvas X/Y: ({canvasx}, {canvasy})\nEvent X/Y : ({event.x}, {event.y})")
-        print(type(event.x))
+        self.log(f"Canvas X/Y: ({canvasx}, {canvasy})\nEvent X/Y : ({event.x}, {event.y})")
+        self.log(type(event.x))
 
     def do_zoom(self, event: Event):
         self.zoom_level += 1 if event.delta > 0 else -1
         if self.min_zoom <= self.zoom_level <= self.max_zoom:
             self.update_idletasks()
-            print(f'zoomed: {self.zoom_level = }')
+            self.log(f'zoomed: {self.zoom_level = }')
             x = self.canvasx(event.x)
             y = self.canvasy(event.y)
             self.factor = 1.001 ** event.delta
@@ -96,7 +96,7 @@ class LifeBoard(Canvas):
     def alt_clicked(self, event):
         x, y = self.canvasx(event.x), self.canvasy(event.y)
         x0, y0, x1, y1 = self.round_coords(x, y)
-        print(f"\n(x0, y0) = ({x0}, {y0})")
+        self.log(f"\n(x0, y0) = ({x0}, {y0})")
         # check for cell
         clicked_cell_id = None
         try:
@@ -105,29 +105,35 @@ class LifeBoard(Canvas):
             pass
         if clicked_cell_id:
             clicked_cell: Cell = self.cells[clicked_cell_id]
-            print(clicked_cell)
+            self.log(clicked_cell)
 
-    def clicked(self, event):
+    def clicked(self, event=None, recursive=False):
+        if self.playing:
+            self.toggle_play_pause()
+            self.saved_configuration = []
         x, y = self.canvasx(event.x), self.canvasy(event.y)
         x0, y0, x1, y1 = self.round_coords(x, y)
-        print(f"\n(x0, y0) = ({x0}, {y0})")
+        if not recursive:
+            self.saved_configuration.append((x0, y0))
+            self.log(self.saved_configuration)
+        self.log(f"\n(x0, y0) = ({x0}, {y0})")
         # check for cell
         clicked_cell_id = None
         try:
             clicked_cell_id = self.find_withtag(f'x{x0}&&y{y0}')[0]
         except Exception as e:
             pass
-        print(f'{clicked_cell_id = }')
+        self.log(f'{clicked_cell_id = }')
         if clicked_cell_id:
-            print('clicked an existing cell')
+            self.log('clicked an existing cell')
             clicked_cell: Cell = self.cells[clicked_cell_id]
             clicked_cell.activate()
         else:
-            print('no existing cell', end=" ")
+            self.log('no existing cell', end=" ")
             new_cell = Cell(self, x0, y0, x1, y1)
             new_cell.activate()
             self.cells[new_cell.id] = new_cell
-            print(f"created cell {new_cell.id}")
+            self.log(f"created cell {new_cell.id}")
     
     def round_coords(self, x, y):
         scaled_size = self.grid_spacing * self.drawing_factor
@@ -139,7 +145,7 @@ class LifeBoard(Canvas):
         self.cells_to_activate = {} 
         for id, cell in self.cells.items():
             cell: Cell
-            cell.next_generation()
+            cell.compute_next_generation()
 
     def update_cells(self):
         _cells = self.cells.copy()
@@ -148,18 +154,49 @@ class LifeBoard(Canvas):
             cell.activate()
     
     def update_board(self):
-        self.after(100, self.prime_cells_for_update)
-        self.after(10, self.update_cells)
+        if self.playing:
+            self.prime_cells_for_update()
+            self.after(100, self.update_cells)
+            self.after(self.update_interval, self.update_board)
+        else:
+            self.prime_cells_for_update()
+            self.update_cells()
 
     def schedule_update_board(self):
-        self.after(200, self.update_board)
-        self.after(200, self.schedule_update_board)
+        self.playing = True
+        self.update_board()
+
+    def toggle_play_pause(self):
+        if self.playing:
+            self.stop_update_board()
+        else:
+            self.schedule_update_board()
+
+    def stop_update_board(self):
+        self.after_cancel(self.update_board)
+        self.after_cancel(self.update_cells)
+        self.playing = False
+
+    def log(self, *args, route_print=True, **kwargs):
+        if self.log_widget is None:
+            return
+        self.log_widget['state'] = 'normal'
+        if route_print:
+            print(*args, **kwargs)
+        end = None
+        try:
+            end = kwargs['end']
+        except:
+            end = '\n'
+        self.log_widget.insert(END, args[0] + end)
+        self.log_widget.see('end')
+        self.log_widget['state'] = 'disabled'
 
 
 class Cell:
     board: LifeBoard = None
     FILL_COLOUR = '#0047ab'  # cobalt blue
-    OUTLINE_COLOUR = 'black'  # "#dcdcdc"
+    OUTLINE_COLOUR = "#dcdcdc"  # "#dcdcdc"
     OUTLINE_WIDTH = 2
 
     def __init__(self, board, x0, y0, x1, y1, **kwargs):
@@ -176,7 +213,7 @@ class Cell:
         # self.next_generation()  # sets self.next_state
 
     def __repr__(self) -> str:
-        return f"Class: Cell\n  ID={self.id}\n  status={'alive' if self.alive else 'dead'}\n  co-ord={self.grid_location}\n  neighbours={[neighbour.id for neighbour in self.neighbours]}\n  living-neighbours={self.find_living_neighbours()}\n  next-gen={self.next_generation()}"
+        return f"Class: Cell\n  ID={self.id}\n  status={'alive' if self.alive else 'dead'}\n  co-ord={self.grid_location}\n  neighbours={[neighbour.id for neighbour in self.neighbours]}\n  living-neighbours={self.find_living_neighbours()}\n  next-gen={self.compute_next_generation()}"
     
     def __eq__(self, value: object) -> bool:
         return self.id == value
@@ -216,7 +253,7 @@ class Cell:
                         existing_cell = self.board.cells[existing_cell_id]
                         self.neighbours.append(existing_cell)
                     except Exception as e:
-                        # print(f"{self.id=}, {i=}, {j=}  :  {e}")
+                        # self.log(f"{self.id=}, {i=}, {j=}  :  {e}")
                         pass
         return self.neighbours
 
@@ -249,7 +286,7 @@ class Cell:
                 self.living_neighbours += 1
         return self.living_neighbours
     
-    def next_generation(self):
+    def compute_next_generation(self):
         self.find_living_neighbours()
         if self.alive:
             if self.living_neighbours in [2, 3]:
@@ -272,7 +309,7 @@ class GameOfLife(Tk):
         super().__init__(**kwargs)
         self.header = "Game of Life"
         self.title(self.header)
-        icon_data = b'iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAACXBIWXMAAA7DAAAOwwHHb6hkAAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAABUBJREFUaIHV2VuMXWUVB/DfmltvQy+2trRIgSGaWGIQIyKagg8+GG8kpBoTozFgwosWEh/EN030SZM+mRijidrESKIRAUNQ46UQaDTxFo1QFSilLWA70E7tTJnL8uHbp3PYPWc655yNA//ky5y99p69//+9Lt/6vh24Ds97fWLbCJ7PzGMrzaQfRIQhXLLSRAbBEA5ExK0rTaRfDGErfhIRP4iI8ZUm1CsC2XZ8CB/OzH+uEJ+eEBE7hmq2t+CxiNi9EoT6wRAer9k245cR8ckV4NMzhvBBfLdmX4X9EfGF/z+l3rEjM+FOzCs50T6+mJleiwM7zguoDHtwtiZgAXesNNllCaiMuzFVEzGLD6004WUJqE7chDM1EVO47tUnlVEfSwmol1GQmQfwMcy1mcfx44jY2FemLYEIEWFthA24FNuUargOoxFGIgxHiAv+V/FAx2YuIm7Hd2rmB/DRrF7BgMRXYRMm8AbswjDG8Cz+g+N4CcfwsqrQZMqI6BxCNTftc2Fl2jtgmAyRm8k95D7yIDlNPkeeqf6eJP9OPkx+mbyWvJxcS46Ue3TJgZqAUTxSE/BfXD2AgPeRXyWfqIjPkwtk1sYCeY48TD5I3kVeSa4rItZcdlEBlYidOFkT8St0TbAuxNeRHyHvJ6e6kO42zpF/Jr9Evo0cZ2LnsgRUIj7VIZQ+0wP5cfID5KPkXA/E28c0eYj8LPlm3j+xbAGViPtqAo5h3TLf/A3kveRMn+TbPfEYeRuf39WxjC6Bz1Xx38J2pQXpighjVbLdhpuVPmsQjCrr+Bu5ZaInAZn5jFKV2nF3RGztdH21ZN2MG/AOrO+d74W3VUS8l0u39+oB+LpSn1u4BHu7XLtGmZhuxBXVw5vAEC5na88hJDNP42s18x0RsabdEGFYEXeFEmqbNCegwpq39uMB+DZOtB1vQX0BNKq0AtuVMFro81ndsJqRDX0JyMxpRUQ77oqIoPQ2SjuwUemhRpUWoWHEeL8egG8qbXYL1+Bd1e9hiz1N6xntjWFDiLm+BVQN4L0188dbd8ZI9XtWacaaxjzzpwbxAPyodrynCqPWRDenrPDmmZ33ih2cgTHHzNFBBTyoLHRa2Il3Lz7ANGb4yyaOr204j09x4uBAAqpkfqBmvkV51fOYZf9VPPSe0nVMD/K4dpzDEQ4/OagH4Ke1493Oh889q9m/lyPBE0oqNJLLx/E9HjrchIDfeWVwv5PLVmOBu+/k+Mby+eEZHErytP6TIZW1+m/K+MbkwAIy8wW076WOcex6tlzLiU+XFDmKJzH3KKOP47QSYr1iGj/Ht3CYxVI3KB5W9lVb2M3kTYwNF65j2PI0N9+jzBcv4u3KDD7k4i1GKm78RUX+j5nmIpoT8Ahubzv+BLlrsRC9hImvsOqoEgInFQ+0+qT1lYh6RCxgRvFw680fy1wsZ00J+Eft+JrF589h5rfsu09pLc4qa4rncBWuxhurcxuUGbxF/Cn8XvHwrzHbTr5JAV2+J7Sq6fy+ivR8RexFJSSexZ+UZm99JWBGmb3/hSP4K6YyO5evRgRk5mRETCp7O/WzhzjbmisWKnJnMamszsax2mIezCiJM6VqQTK7V62mPAD/1lGA72fmAkScd8nLiohhJR+iGq1zC5nLq1JNCngK19dsiR+eP8jFHe+q5Z5ru27JN90NTQo41cF2MDOf7nRxm5iB0MRM3MKZDrb7G7x/RzQpYKqDrd7oNY5X0wMv4G8N3r8jmsyBP+BnyjbKm3CgiS34i2HJ7wOvdUTEjhFsqzYTXo/Y9j+E8Ah+V+UfsQAAAABJRU5ErkJggg=='
+        icon_data = b'iVBORw0KGgoAAAANSUhEUgAAAEMAAABDCAYAAADHyrhzAAAACXBIWXMAAA9hAAAPYQGoP6dpAAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAATZJREFUeJzt2TFKA1EYReH7JPvIGrRPq9MG01u4jlRuw8Z+xDbW9skaspLfQpADg1jkTWDgfGWKO8mBR2Beq6rMqQ3jMclth6lTHXZ3HXb+dDPn+NIYA4wBxgBjgDHAGGAMMAYYA4wBxgBjgDHAGGAMMAasrvCMj1Q7XrzS6tzhu/zziJlf+y2JxwSMAcYAY8A1/k1m1YZxn2TbY2vxMVJtnVY9Lqk8JmQMMAYYA4wBxgBjgDHAGGAMMAYYA4wBxgBjgDFg+S93fu5TTn2mvDf55TEBY4AxwBjQcj++dtr6qs/Ht8kDhnGfauuL11ud67B7mXz88P6UZHPxfpJVWj33GEq1JJnESLLtdK9xSjKJkWTT6zd4TMAYYAwwBhgDjAHGAGOAMcAYYAwwBhgDjAHGAGOAMeAbxZYuqxlzi5AAAAAASUVORK5CYII='
         icon = PhotoImage(data=icon_data)
         self.iconphoto(True, icon)
         # self.iconbitmap(default='icon.ico')
@@ -303,6 +340,16 @@ class GameOfLife(Tk):
         center_y = self.board.winfo_height() // 2
         self.board.scan_dragto(x=center_x, y=center_y, gain=1)
 
+    def center_on_drawing(self):
+        self.update()
+        # x0, y0, x1, y1 = self.board.bbox(ALL)
+        # self.log(x0, y0, x1, y1)
+        # drawing_width = abs(x1 - x0); drawing_height = abs(y1 - y0)
+        # center_x = abs(self.board.winfo_width() - drawing_width) // 2
+        # center_y = abs(self.board.winfo_height() - drawing_height) // 2
+        # self.board.scan_dragto(x=center_x, y=center_y, gain=1)
+        
+        self.board.scan_dragto(x=self.board.saved_configuration[0][0], y=self.board.saved_configuration[0][1], gain=1)
     
     def build_window(self, scrollbars, scrollregion, pan, zoom):
         self.set_styles()
@@ -348,8 +395,29 @@ class GameOfLife(Tk):
         content_frame = ttk.Frame(frame)
         content_frame.grid(row=1, column=0, sticky=(N, S))
 
-        next_step_button = ttk.Button(content_frame, text='Next', command=self.board.schedule_update_board)
+        next_step_button = ttk.Button(content_frame, text='Next', command=self.board.update_board)
         next_step_button.grid()
+
+        self.play_pause_state = BooleanVar(value=FALSE)
+        self.pp_button_text = StringVar(value='Play')
+        play_button = ttk.Button(content_frame, textvariable=self.pp_button_text, command=self.toggle_pause_play)
+        play_button.grid()
+
+        clear_button = ttk.Button(content_frame, text='Clear', command=self.clear_board)
+        clear_button.grid()
+
+        reset_button = ttk.Button(content_frame, text='Reset', command=self.reset_board)
+        reset_button.grid()
+
+                # Logging Text
+        self.log_text = Text(content_frame, width=80, height=8, font='Helvetica 9', background="#252525", foreground='white', wrap='none', borderwidth=1)
+        self.log_text.grid()
+        self.log_text.insert('1.0', "Logging Window\n\n")
+        self.log_text["state"] = "disabled"
+        self.board.log_widget = self.log_text
+        clear_log_button = ttk.Button(content_frame, text='X', command=self.clear_log)
+        clear_log_button.grid()
+        clear_log_button.config(width=2)
         
         return
     
@@ -364,11 +432,30 @@ class GameOfLife(Tk):
         widget_names = [
             "TButton", "TCheckbutton", "TRadiobutton", "TEntry", "TLabel", 
             "TCombobox", "TSpinbox", "TScale", "TProgressbar", "Treeview", 
-            "Notebook", "TFrame", "TLabelFrame"
+            "Notebook", "TFrame", "TLabelFrame", "Text"
         ]
         for widget in widget_names:
             style.configure(widget, **style_args)
 
+    def toggle_pause_play(self):
+        self.board.toggle_play_pause()
+        self.play_pause_state.set(not self.play_pause_state.get())
+        self.pp_button_text.set('Pause' if self.play_pause_state.get() else 'Play')
+    
+    def clear_board(self, clear_memory=True):
+        if self.play_pause_state.get():
+            self.toggle_pause_play()
+        if clear_memory:
+            self.board.saved_configuration = []
+        self.board.delete(ALL)
+        self.board.cells = {}
+    
+    def reset_board(self):
+        self.clear_board(clear_memory=False)
+        self.update_idletasks()
+        self.board.draw_configuration(self.board.saved_configuration)
+        self.center_on_drawing()
+        pass
 
     def update_game(self):
         # Perform batch updates for the cells
@@ -376,6 +463,24 @@ class GameOfLife(Tk):
 
         # Schedule the next update
         self.after(100, self.update_game)
+
+    def clear_log(self):
+        self.log_text['state'] = 'normal'
+        self.log_text.delete('1.0', END)
+        self.log_text.insert('1.0', "Logging Window\n\n")
+        self.log_text.see('end')
+        self.log_text['state'] = 'disabled'
+
+    def log(self, *args, route_print=True, **kwargs):
+        log_widget = self.log_text
+        log_widget['state'] = 'normal'
+        if route_print:
+            print(*args, **kwargs)
+        if end is None:
+            end = '\n'
+        log_widget.insert(END, args[0] + kwargs['end'])
+        log_widget.see('end')
+        log_widget['state'] = 'disabled'
     
 if __name__ == '__main__':
     main()

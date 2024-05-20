@@ -45,3 +45,7 @@ class ToolTip:
             self.widget.after_cancel(self.enter_id)
             self.enter_id = None
 
+
+class Logger(Text):
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent, *args, **kwargs)
