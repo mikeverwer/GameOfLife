@@ -3,9 +3,8 @@ from tkinter import ttk
 
 class ToolTip:
     def __init__(self, widget, text, child=None, delay=500):
-        self.widget = widget
+        self.widget: Widget = widget
         self.text = text
-        self.child = child
         self.delay = delay
         self.tooltip = None
         self.enter_id = None
@@ -48,4 +47,33 @@ class ToolTip:
 
 class Logger(Text):
     def __init__(self, parent, *args, **kwargs):
+        self.configure('wrap', 'word')
         super().__init__(parent, *args, **kwargs)
+        self.route_print = True
+
+    def clear_log(self):
+        self['state'] = 'normal'
+        self.delete('1.0', END)
+        self.insert('1.0', "Logging Window\n\n")
+        self.see('end')
+        self['state'] = 'disabled'
+
+    def log(self, *args, **kwargs):
+        self['state'] = 'normal'
+        if self.route_print:
+            print(*args, **kwargs)
+        end: str = None
+        try:
+            end = kwargs[end]
+        except:
+            end = '\n'
+        if len(args) == 1:
+            self.insert('end', )
+        for key, value in kwargs:
+            if key == 'end':
+                end = value
+            else:
+                end = '\n'
+        self.insert(END, args[0] + kwargs['end'])
+        self.see('end')
+        self['state'] = 'disabled'

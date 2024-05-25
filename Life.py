@@ -32,6 +32,7 @@ class LifeBoard(Canvas):
         super().__init__(parent, **canvas_args)
 
         self.playing = False
+        self.generation = 0
         frames_per_second = 4
         self.update_interval = 1000 // frames_per_second  # frames per second
         self.grid_spacing = 16
@@ -59,11 +60,15 @@ class LifeBoard(Canvas):
         if config is None:
             config = self.saved_configuration
         for point in config:
+            # create a cell at each point
+            # space = self.grid_spacing
+            # new_cell = Cell(self, point[0], point[1], point[0] + space, point[1] + space)
+            # new_cell.activate()
+            # self.cells[new_cell.id] = new_cell
             event = Event()
             screen_x = point[0] + self.winfo_rootx()
             screen_y = point[1] - self.winfo_rooty()
             event.x = screen_x;        event.y = screen_y
-
             event.x = point[0]; event.y - point[1]
             self.clicked(event, recursive=True)
 
@@ -148,6 +153,14 @@ class LifeBoard(Canvas):
         x0, y0 = (x // scaled_size) * scaled_size, (y // scaled_size) * scaled_size
         x1, y1 = x0 + scaled_size, y0 + scaled_size
         return x0, y0, x1, y1  
+    
+    def get_state(self):
+        self.saved_configuration = []
+        for id, cell in self.cells.items():
+            cell: Cell
+            if cell.alive:
+                self.saved_configuration.append(cell.grid_location)
+                pass
 
     def prime_cells_for_update(self):
         self.cells_to_activate = {} 
@@ -161,15 +174,13 @@ class LifeBoard(Canvas):
             cell.activate()
     
     def update_board(self):
+        self.prime_cells_for_update()
+        self.update_cells()
+        self.generation += 1
         if self.playing:
             # self.prime_cells_id = self.after(10, self.prime_cells_for_update)
             # self.update_cells_id = self.after(10, self.update_cells)
-            self.prime_cells_for_update()
-            self.update_cells()
             self.schedule_update_board()
-        else:
-            self.prime_cells_for_update()
-            self.update_cells()
 
     def schedule_update_board(self):
         self.playing = True
@@ -207,7 +218,7 @@ class LifeBoard(Canvas):
 class Cell:
     board: LifeBoard = None
     FILL_COLOUR = '#0047ab'  # cobalt blue
-    OUTLINE_COLOUR = "#dcdcdc"  # "#dcdcdc"
+    OUTLINE_COLOUR = "#eeeeee"  # "#dcdcdc"
     OUTLINE_WIDTH = 2
 
     def __init__(self, board, x0, y0, x1, y1, **kwargs):
@@ -217,10 +228,7 @@ class Cell:
         self.grid_location = (x0, y0)
         self.id = self.board.create_rectangle(x0, y0, x1, y1, tags=(f"x{x0}", f"y{y0}"), outline=self.OUTLINE_COLOUR, width=self.OUTLINE_WIDTH)
         # self.board.create_text(text=f'{self.id}', x=self.grid_location[0], y=self.grid_location[1])
-        self.neighbourhood_region = self.get_neighbourhood()
         self.neighbours: list = []; self.find_neighbours()
-        # self.board.tag_bind(self.id, "<Button-1>", lambda event: self.activate())
-        self.board.tag_bind(self.id, "<Button-3>", lambda event: self.__repr__())
         # self.next_generation()  # sets self.next_state
 
     def __repr__(self) -> str:
