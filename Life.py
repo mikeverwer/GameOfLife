@@ -1,10 +1,7 @@
 from tkinter import *
 from tkinter import ttk
-from tkinter import colorchooser
 from tooltip import ToolTip
-import os
-import ctypes
-ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("SimulationDefault.MikeVerwer")
+import tk_dark_mode
 
 
 def main():
@@ -14,8 +11,8 @@ def main():
 
 class LifeBoard(Canvas):
     def __init__(self, parent, **kwargs):
-        self.parent: GameOfLife = parent
         canvas_args: dict = {}
+        self.app: GameOfLife = None
         self.make_pannable = False
         self.make_zoomable = False
         self.log_widget: Text = None
@@ -25,7 +22,7 @@ class LifeBoard(Canvas):
         self.drawing_factor = 1
         self.zoom_level = self.max_zoom  # fully zoomed in
         for key, value in kwargs.items():
-            if key in ["pan", "zoom"]:
+            if key in ["pan", "zoom", "app"]:
                 self.handle_kwarg(key, value)
             else:
                 canvas_args[key] = value       
@@ -49,6 +46,8 @@ class LifeBoard(Canvas):
             self.make_zoomable = True
         elif key == 'logger' and value:
             self.log_widget = value
+        elif key == "app" and value:
+            self.app = value
     
     def starting_config(self):
         event = Event()
@@ -56,21 +55,21 @@ class LifeBoard(Canvas):
         config = [(s, s), (2*s, s), (3*s, s), (3*s, 0), (2*s, -1*s)]
         return config
 
-    def draw_configuration(self, config:list=None):
+    def draw_configuration(self, config: list = None):
         if config is None:
             config = self.saved_configuration
-        for point in config:
-            # create a cell at each point
-            # space = self.grid_spacing
-            # new_cell = Cell(self, point[0], point[1], point[0] + space, point[1] + space)
-            # new_cell.activate()
-            # self.cells[new_cell.id] = new_cell
-            event = Event()
-            screen_x = point[0] + self.winfo_rootx()
-            screen_y = point[1] - self.winfo_rooty()
-            event.x = screen_x;        event.y = screen_y
-            event.x = point[0]; event.y - point[1]
-            self.clicked(event, recursive=True)
+        scaled = self.grid_spacing * self.drawing_factor
+        for x0, y0 in config:
+            x1, y1 = x0 + scaled, y0 + scaled
+            existing = self.find_withtag(f'x{x0}&&y{y0}')
+            if existing:
+                cell = self.cells[existing[0]]
+                if not cell.alive:
+                    cell.activate()
+            else:
+                cell = Cell(self, x0, y0, x1, y1)
+                cell.activate()
+                self.cells[cell.id] = cell
 
     def do_binds(self):
         self.bind("<Button-3>", self.alt_clicked)
@@ -120,33 +119,32 @@ class LifeBoard(Canvas):
     def clicked(self, event=None, recursive=False):
         if self.playing:
             self.toggle_play_pause()
-            self.saved_configuration = []
+            # don't wipe saved_configuration here
         x, y = self.canvasx(event.x), self.canvasy(event.y)
         x0, y0, x1, y1 = self.round_coords(x, y)
-        if not recursive:
-            if (event.x, event.y) in self.saved_configuration:
-                self.saved_configuration.remove((event.x, event.y))
-            else:
-                self.saved_configuration.append((event.x, event.y))
-                self.log(self.saved_configuration)
-        self.log(f"\n(x0, y0) = ({x0}, {y0})")
-        # check for cell
+
         clicked_cell_id = None
         try:
             clicked_cell_id = self.find_withtag(f'x{x0}&&y{y0}')[0]
-        except Exception as e:
+        except Exception:
             pass
-        self.log(f'{clicked_cell_id = }')
+
         if clicked_cell_id:
-            self.log('clicked an existing cell')
-            clicked_cell: Cell = self.cells[clicked_cell_id]
-            clicked_cell.activate()
+            cell = self.cells[clicked_cell_id]
+            cell.activate()
         else:
-            self.log('no existing cell', end=" ")
-            new_cell = Cell(self, x0, y0, x1, y1)
-            new_cell.activate()
-            self.cells[new_cell.id] = new_cell
-            self.log(f"created cell {new_cell.id}")
+            cell = Cell(self, x0, y0, x1, y1)
+            cell.activate()
+            self.cells[cell.id] = cell
+
+        if not recursive:
+            key = (x0, y0)                       # store the *grid* position
+            if cell.alive:
+                if key not in self.saved_configuration:
+                    self.saved_configuration.append(key)
+            else:
+                if key in self.saved_configuration:
+                    self.saved_configuration.remove(key)
     
     def round_coords(self, x, y):
         scaled_size = self.grid_spacing * self.drawing_factor
@@ -191,6 +189,8 @@ class LifeBoard(Canvas):
             self.stop_update_board()
         else:
             self.schedule_update_board()
+        self.app.play_pause_state.set(not self.app.play_pause_state.get())
+        self.app.pp_button_text.set('Pause' if self.app.play_pause_state.get() else 'Play')
 
     def stop_update_board(self):
         self.after_cancel(self.update_board_id)
@@ -218,7 +218,7 @@ class LifeBoard(Canvas):
 class Cell:
     board: LifeBoard = None
     FILL_COLOUR = '#0047ab'  # cobalt blue
-    OUTLINE_COLOUR = "#eeeeee"  # "#dcdcdc"
+    OUTLINE_COLOUR = "#aaaaaa"  # "#dcdcdc"
     OUTLINE_WIDTH = 2
 
     def __init__(self, board, x0, y0, x1, y1, **kwargs):
@@ -242,7 +242,12 @@ class Cell:
 
     def activate(self):
         self.alive = not self.alive
-        fill = self.FILL_COLOUR if self.alive else ''
+        if self.alive:
+            self.board.addtag_withtag("alive", self.id)
+            fill = self.FILL_COLOUR
+        else:
+            self.board.dtag(self.id, "alive")
+            fill = ''
         self.board.itemconfig(self.id, fill=fill)
         if len(self.neighbours) < 8:
             self.build_neighbours()
@@ -326,6 +331,7 @@ class GameOfLife(Tk):
     # The app is a subclass of a Tk() object. This way, we can simply call `self` instead of `self.root`.
     def __init__(self, scrollbars: str = "", scrollregion: tuple = None, pan: str = "", zoom: str = "", **kwargs):
         super().__init__(**kwargs)
+        tk_dark_mode.apply_dark_theme(self)
         self.header = "Game of Life"
         self.title(self.header)
         icon_data = b'iVBORw0KGgoAAAANSUhEUgAAAEMAAABDCAYAAADHyrhzAAAACXBIWXMAAA9hAAAPYQGoP6dpAAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAATZJREFUeJzt2TFKA1EYReH7JPvIGrRPq9MG01u4jlRuw8Z+xDbW9skaspLfQpADg1jkTWDgfGWKO8mBR2Beq6rMqQ3jMclth6lTHXZ3HXb+dDPn+NIYA4wBxgBjgDHAGGAMMAYYA4wBxgBjgDHAGGAMMAasrvCMj1Q7XrzS6tzhu/zziJlf+y2JxwSMAcYAY8A1/k1m1YZxn2TbY2vxMVJtnVY9Lqk8JmQMMAYYA4wBxgBjgDHAGGAMMAYYA4wBxgBjgDFg+S93fu5TTn2mvDf55TEBY4AxwBjQcj++dtr6qs/Ht8kDhnGfauuL11ud67B7mXz88P6UZHPxfpJVWj33GEq1JJnESLLtdK9xSjKJkWTT6zd4TMAYYAwwBhgDjAHGAGOAMcAYYAwwBhgDjAHGAGOAMeAbxZYuqxlzi5AAAAAASUVORK5CYII='
@@ -378,39 +384,40 @@ class GameOfLife(Tk):
             center_y = abs(self.board.winfo_height() - drawing_height) // 2
             self.board.scan_dragto(x=int(center_x), y=int(center_y), gain=1)
 
-    def center_canvas_on_drawings(self, canvas=None):
-        if canvas is None:
-            canvas = self.board 
-        self.update_idletasks()       
-        bbox = canvas.bbox("all")
-        if bbox:
-            center_x = (bbox[0] + bbox[2]) / 2
-            center_y = (bbox[1] + bbox[3]) / 2
-            canvas_width = canvas.winfo_width()
-            canvas_height = canvas.winfo_height()
-            x_offset = int(canvas_width / 2 - center_x)
-            y_offset = int(canvas_height / 2 - center_y)
-            canvas.scan_dragto(x_offset, y_offset, gain=1)
+    def center_on_living(self):
+        self.update_idletasks()
+        bbox = self.board.bbox("alive")
+        if not bbox:
+            return
+        cx = (bbox[0] + bbox[2]) / 2
+        cy = (bbox[1] + bbox[3]) / 2
+        w = self.board.winfo_width()
+        h = self.board.winfo_height()
+        # where the cells currently appear in widget coords
+        screen_cx = cx - self.board.canvasx(0)
+        screen_cy = cy - self.board.canvasy(0)
+        # how far we need to shift content to land them at widget centre
+        dx = w / 2 - screen_cx
+        dy = h / 2 - screen_cy
+        # scan_mark(0,0) + scan_dragto(dx, dy) shifts content by exactly (dx, dy)
+        self.board.scan_mark(0, 0)
+        self.board.scan_dragto(int(dx), int(dy), gain=1)
     
     def build_window(self, scrollbars, scrollregion, pan, zoom):
-        self.set_styles()
-
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
         mainframe = ttk.Frame(self, padding=(4, 4, 4, 4))
         mainframe.grid(row=0, column=0, sticky=(N, E, S, W))
+        mainframe.columnconfigure(0, weight=1)
         mainframe.rowconfigure(0, weight=1)
-        mainframe.columnconfigure(1, weight=1)
 
         control_panel = ttk.Frame(mainframe)
-        control_panel.grid(row=0, column=0, sticky=('nsew'))
+        control_panel.grid(row=1, column=0, sticky=(E,W))
 
-        self.board = LifeBoard(mainframe, background='white', pan=pan, zoom=zoom, bg='#dcdcdc')
+        self.board = LifeBoard(mainframe, app=self, pan=pan, zoom=zoom, bg="#AAAAAA", background='#AAAAAA', borderwidth=0)
         # self.board.config(scrollregion=self.board.bbox("all"))
-        self.board.grid(row=0, column=1, sticky=(N, E, S, W))
-        self.board.rowconfigure(0, weight=1)
-        self.board.columnconfigure(0, weight=1)
+        self.board.grid(row=0, column=0, sticky=(N, E, S, W))
 
         if "h" in scrollbars:
             self.sim_Hscrollbar = ttk.Scrollbar(mainframe, orient='horizontal', command=self.board.xview)
@@ -424,20 +431,18 @@ class GameOfLife(Tk):
         self.build_control_panel(control_panel)
     
 
-    def build_control_panel(self, control_panel):
-        frame: ttk.Frame = control_panel
-        # frame.rowconfigure(1, weight=1)
-        header_frame = ttk.Frame(frame)
-        header_frame.grid(row=0, column=0, sticky=(N, W), padx=10, pady=10)
-        name_label = ttk.Label(header_frame, text=self.header, font="_ 24 bold")
-        name_label.grid(row=0, column=0, columnspan=1000, sticky=E)
-        ToolTip(name_label, "This is a ToolTip.\nIt has multiple lines.\nanother one.\n\nand another.")
+    def build_control_panel(self, control_panel: ttk.Frame):
+        control_panel.columnconfigure(0, weight=1, uniform='cp')
+        control_panel.columnconfigure(1, weight=1, uniform='cp')
+        control_panel.columnconfigure(2, weight=1, uniform='cp')
 
-        content_frame = ttk.Frame(frame)
-        content_frame.grid(row=1, column=0, sticky=(N, S))
+        # header_frame = Frame(control_panel, bg='red', border=1)
+        # header_frame.grid(row=0, column=0, sticky=W, pady=10)
+        name_label = ttk.Label(control_panel, text=self.header, font="_ 24 bold")
+        name_label.grid(row=0, column=0, padx=20, sticky=W, pady=10)
 
-        button_frame = ttk.Frame(content_frame)
-        button_frame.grid(row=0, column=0, sticky='ns')
+        button_frame = ttk.Frame(control_panel)
+        button_frame.grid(row=0, column=1)   # no sticky → centred in its cell
 
         next_step_button = ttk.Button(button_frame, text='Next', command=self.board.update_board)
         next_step_button.grid(row=0, column=0, padx=5)
@@ -447,44 +452,34 @@ class GameOfLife(Tk):
         play_button = ttk.Button(button_frame, textvariable=self.pp_button_text, command=self.toggle_pause_play)
         play_button.grid(row=0, column=1, padx=5)
 
+        ttk.Separator(button_frame, orient='vertical').grid(row=0, column=2, padx=10, sticky=(N,S))
+
         clear_button = ttk.Button(button_frame, text='Clear', command=self.clear_board)
-        clear_button.grid(row=2, column=0, columnspan=2, pady=10)
+        clear_button.grid(row=0, column=3, padx=5)
 
         reset_button = ttk.Button(button_frame, text='Reset', command=self.reset_board)
-        reset_button.grid(row=1, column=0, columnspan=2, pady=5)
+        reset_button.grid(row=0, column=4, padx=5)
 
+        about_button = ttk.Button(control_panel, text='About')
+        about_button.grid(row=0, column=2)
+        # self.add_logging_text(content_frame)
+        
+    
+    def add_logging_text(self, content_frame):
         # Logging Text
         self.log_text = Text(content_frame, width=40, height=8, font='Helvetica 9', background="#252525", foreground='white', wrap='word', borderwidth=1)
-        self.log_text.grid()
+        self.log_text.grid(row=0, column=2, rowspan=2)
         self.log_text.insert('1.0', "Logging Window\n\n")
         self.log_text["state"] = "disabled"
         self.board.log_widget = self.log_text
         clear_log_button = ttk.Button(content_frame, text='X', command=self.clear_log)
-        clear_log_button.grid()
+        clear_log_button.grid(row=0, column=3)
         clear_log_button.config(width=2)
-        
-        return
-    
-    def set_styles(self):
-        style = ttk.Style()
-        self.mode = 'dark'
-        bg = '#eeeeee' if self.mode == 'light' else '#252525'
-        style_args = {
-            'background': bg,
-            'foreground': 'white'
-        }
-        widget_names = [
-            "TButton", "TCheckbutton", "TRadiobutton", "TEntry", "TLabel", 
-            "TCombobox", "TSpinbox", "TScale", "TProgressbar", "Treeview", 
-            "Notebook", "TFrame", "TLabelFrame", "Text"
-        ]
-        for widget in widget_names:
-            style.configure(widget, **style_args)
+
 
     def toggle_pause_play(self):
         self.board.toggle_play_pause()
-        self.play_pause_state.set(not self.play_pause_state.get())
-        self.pp_button_text.set('Pause' if self.play_pause_state.get() else 'Play')
+
     
     def clear_board(self, clear_memory=True):
         if self.play_pause_state.get():
@@ -493,14 +488,15 @@ class GameOfLife(Tk):
             self.board.saved_configuration = []
         self.board.delete(ALL)
         self.board.cells = {}
+
     
     def reset_board(self):
         self.clear_board(clear_memory=False)
         self.update_idletasks()
         self.board.draw_configuration(self.board.saved_configuration)
-        # self.center_on_configured_drawing()
-        self.center_canvas_on_drawings()
-        pass
+        self.update_idletasks()        # let bbox see the new items
+        self.center_on_living()
+
 
     def clear_log(self):
         self.log_text['state'] = 'normal'
@@ -508,6 +504,7 @@ class GameOfLife(Tk):
         self.log_text.insert('1.0', "Logging Window\n\n")
         self.log_text.see('end')
         self.log_text['state'] = 'disabled'
+
 
     def log(self, *args, route_print=True, **kwargs):
         log_widget = self.log_text
@@ -519,6 +516,7 @@ class GameOfLife(Tk):
         log_widget.insert(END, args[0] + kwargs['end'])
         log_widget.see('end')
         log_widget['state'] = 'disabled'
+
     
 if __name__ == '__main__':
     main()
