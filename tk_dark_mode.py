@@ -3,17 +3,14 @@ from tkinter import ttk
 from PIL import Image, ImageDraw, ImageTk
 
 
-def apply_dark_theme(root):
-    BG         = "#1e1e1e"
-    # BG         = "#21252B"
-    SURFACE    = "#252526"   # entries, listboxes, text
-    # SURFACE    = "#282C34"   # entries, listboxes, text
-    SURFACE_HI = "#2d2d30"   # buttons, combobox
-    # SURFACE_HI = "#282C34"   # buttons, combobox
-    BORDER     = "#0047ab"   # "#3e3e42"
-    FG         = "#e0e0e0"
-    ACCENT     = "#0047ab"
-    SELECT     = "#264f78"
+def apply_dark_theme(root, custom_chk=True, **overrides):
+    BG         = overrides.get('BG',         "#1e1e1e")
+    SURFACE    = overrides.get('SURFACE',    "#252526")   # entries, listboxes, text
+    SURFACE_HI = overrides.get('SURFACE_HI', "#2d2d30")   # buttons, combobox
+    BORDER     = overrides.get('BORDER',     "#0047ab")   # "#3e3e42"
+    FG         = overrides.get('FG',         "#e0e0e0")
+    ACCENT     = overrides.get('ACCENT',     "#0047ab")
+    SELECT     = overrides.get('SELECT',     "#264f78")
 
     # Classic tk widgets (Listbox, Text, Canvas, Toplevel, Menu) via the
     # option database. Must run BEFORE any of those widgets get created.
@@ -93,8 +90,8 @@ def apply_dark_theme(root):
         background=SURFACE_HI, troughcolor=BG, bordercolor=BG,
         arrowcolor=FG, gripcount=0)
     style.map("Vertical.TScrollbar", background=[("active", ACCENT)])
-
-    apply_custom_checkbox(root, style, SURFACE, BORDER, ACCENT, FG, size=16)
+    if custom_chk:
+        apply_custom_checkbox(root, style, SURFACE, BORDER, ACCENT, FG, size=16)
 
 
 def _checkbox_images(surface, border, accent, fg, size=14, gap=5, radius=3):

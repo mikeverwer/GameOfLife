@@ -1,8 +1,12 @@
 from tkinter import *
 from tkinter import ttk
 from tooltip import ToolTip
+from tk_animated_toplevel import AnimatedToplevel
 import tk_dark_mode
+import json
+from pathlib import Path
 
+SAVE_FILE = Path(__file__).with_name('saved_configurations.json')
 
 def main():
     app = GameOfLife(pan='y')
@@ -50,7 +54,6 @@ class LifeBoard(Canvas):
             self.app = value
     
     def starting_config(self):
-        event = Event()
         s = self.grid_spacing
         config = [(s, s), (2*s, s), (3*s, s), (3*s, 0), (2*s, -1*s)]
         return config
@@ -63,7 +66,7 @@ class LifeBoard(Canvas):
             x1, y1 = x0 + scaled, y0 + scaled
             existing = self.find_withtag(f'x{x0}&&y{y0}')
             if existing:
-                cell = self.cells[existing[0]]
+                cell: Cell = self.cells[existing[0]]
                 if not cell.alive:
                     cell.activate()
             else:
@@ -148,8 +151,10 @@ class LifeBoard(Canvas):
     
     def round_coords(self, x, y):
         scaled_size = self.grid_spacing * self.drawing_factor
-        x0, y0 = (x // scaled_size) * scaled_size, (y // scaled_size) * scaled_size
-        x1, y1 = x0 + scaled_size, y0 + scaled_size
+        x0 = int((x // scaled_size) * scaled_size)
+        y0 = int((y // scaled_size) * scaled_size)
+        x1 = x0 + int(scaled_size)
+        y1 = y0 + int(scaled_size)
         return x0, y0, x1, y1  
     
     def get_state(self):
@@ -158,7 +163,7 @@ class LifeBoard(Canvas):
             cell: Cell
             if cell.alive:
                 self.saved_configuration.append(cell.grid_location)
-                pass
+        return self.saved_configuration
 
     def prime_cells_for_update(self):
         self.cells_to_activate = {} 
@@ -340,16 +345,38 @@ class GameOfLife(Tk):
         # self.iconbitmap(default='icon.ico')
         
         # Window Creation
+        self.abt_panel: AnimatedToplevel = None
+        self.compendium_panel: AnimatedToplevel = None
         self.build_window(scrollbars=scrollbars, scrollregion=scrollregion, pan=pan, zoom=zoom)
-        self.do_bindings()
         self.wm_minsize(1200, 800)
         self.update_idletasks()  # wait until the window is finished
         self.position_window()
+        self.build_about_panel()
+        self.build_compendium_panel()
+        self.do_bindings()
 
     
     def do_bindings(self):
-        # self.bind("<>")
-        return
+        self._resize_after = None
+        self.bind("<Configure>", self._on_resize)
+
+
+    def _on_resize(self, event):
+        if event.widget is not self:
+            return
+        if self._resize_after is not None:
+            self.after_cancel(self._resize_after)
+        self._resize_after = self.after(50, self._apply_resize)
+
+
+    def _apply_resize(self):
+        self._resize_after = None
+        if not hasattr(self, "abt_panel"):
+            return
+        w = int(self.winfo_width() * 0.7)
+        h = int(self.winfo_height() * 0.7)
+        self.abt_panel.resize(w, h)
+        self.center_on_living()
     
 
     def position_window(self):
@@ -361,12 +388,14 @@ class GameOfLife(Tk):
         self.geometry(f"+{x_pos}+25")
         self.center_on_origin()
 
+
     def center_on_origin(self):
         # center view 
         self.update()
         center_x = (self.board.winfo_width() // 2) - (2 * self.board.grid_spacing)
         center_y = self.board.winfo_height() // 2
         self.board.scan_dragto(x=center_x, y=center_y, gain=1)
+
 
     def center_on_configured_drawing(self):
         self.update()
@@ -383,6 +412,7 @@ class GameOfLife(Tk):
             center_x = abs(self.board.winfo_width() - drawing_width) // 2
             center_y = abs(self.board.winfo_height() - drawing_height) // 2
             self.board.scan_dragto(x=int(center_x), y=int(center_y), gain=1)
+
 
     def center_on_living(self):
         self.update_idletasks()
@@ -402,7 +432,8 @@ class GameOfLife(Tk):
         # scan_mark(0,0) + scan_dragto(dx, dy) shifts content by exactly (dx, dy)
         self.board.scan_mark(0, 0)
         self.board.scan_dragto(int(dx), int(dy), gain=1)
-    
+        
+
     def build_window(self, scrollbars, scrollregion, pan, zoom):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
@@ -436,8 +467,6 @@ class GameOfLife(Tk):
         control_panel.columnconfigure(1, weight=1, uniform='cp')
         control_panel.columnconfigure(2, weight=1, uniform='cp')
 
-        # header_frame = Frame(control_panel, bg='red', border=1)
-        # header_frame.grid(row=0, column=0, sticky=W, pady=10)
         name_label = ttk.Label(control_panel, text=self.header, font="_ 24 bold")
         name_label.grid(row=0, column=0, padx=20, sticky=W, pady=10)
 
@@ -460,21 +489,116 @@ class GameOfLife(Tk):
         reset_button = ttk.Button(button_frame, text='Reset', command=self.reset_board)
         reset_button.grid(row=0, column=4, padx=5)
 
-        about_button = ttk.Button(control_panel, text='About')
-        about_button.grid(row=0, column=2)
-        # self.add_logging_text(content_frame)
+        info_frame = ttk.Frame(control_panel)
+        info_frame.grid(row=0, column=2)
+        ttk.Button(info_frame, text='About', command=self.open_about_panel).grid(row=0, column=0, padx=10)
+
+        save_config_frame = ttk.Frame(info_frame)
+        save_config_frame.grid(row=0, column=1)
+
+        self.config_name_entry = ttk.Entry(save_config_frame, width=20)
+        self.config_name_entry.grid(row=0, column=0, padx=5)
+        ttk.Button(save_config_frame, text="Save", command=self.save_configuration).grid(row=0, column=1)
+
+        ttk.Button(info_frame, text='Compendium', command=self.open_compendium)
+
+        self.add_logging_text(control_panel, grid=False)
         
     
-    def add_logging_text(self, content_frame):
+    def add_logging_text(self, content_frame, grid=True):
         # Logging Text
         self.log_text = Text(content_frame, width=40, height=8, font='Helvetica 9', background="#252525", foreground='white', wrap='word', borderwidth=1)
-        self.log_text.grid(row=0, column=2, rowspan=2)
         self.log_text.insert('1.0', "Logging Window\n\n")
         self.log_text["state"] = "disabled"
         self.board.log_widget = self.log_text
         clear_log_button = ttk.Button(content_frame, text='X', command=self.clear_log)
-        clear_log_button.grid(row=0, column=3)
         clear_log_button.config(width=2)
+        if grid:
+            self.log_text.grid(row=0, column=2, rowspan=2)
+            clear_log_button.grid(row=0, column=3)
+
+
+    def build_about_panel(self):
+        BG="#18191B"
+        self.wwidth = self.winfo_width();   self.wheight = self.winfo_height()
+        self.abt_panel = AnimatedToplevel(self, duration=0.25, bottom_offset=100,
+            width=int(self.wwidth * 0.7), height=int(self.wheight * 0.8))
+
+        container = Frame(self.abt_panel.top, padx=10, pady=10, bg=BG)
+        container.pack(fill='both', expand=True)
+        container.rowconfigure(1, weight=1)   # let content_frame stretch vertically
+        container.columnconfigure(0, weight=1)
+
+        ttk.Button(container, text='Close', command=self.abt_panel.hide).grid(
+            row=0, column=0, pady=(0, 10)
+        )
+
+        content_frame = Frame(container, bg=BG)
+        content_frame.grid(row=1, column=0, sticky=(N,S,E,W))
+        content_frame.columnconfigure(0, weight=1)
+
+        explanation_string = """
+The Game of Life is a cellular automaton created by John Conway in 1970. The game is played by setting an initial configuration of the board and observing how it evolves. 
+
+The state of the board at any generation (or iteration) is completely determined by the initial configuration; in other words, the universe of the game is deterministic.
+
+The game became widely known because it is Turing Complete despite consisting of a very simple ruleset. A Turing Complete system is one in which anything that can be algorithmically computed can be computed within it. Thus, it is possible (given a computer with enough memory) to build the Game of Life inside the Game of Life, or to build Minecraft in the Game of Life, etc.        
+""" 
+        rules_string = """
+The universe of the Game of Life is an infinite two-dimensional grid of square cells that can be either "alive" or "dead".
+The universe "evolves" one generation at a time based on the details below.
+
+Each generation, every cell observes its eight adjacent neighbors and updates its state according to the following:
+
+"""
+        rule1 = "Any live cell with fewer than two live neighbors dies (underpopulation)."
+        rule2 = "Any live cell with more than three live neighbors dies (overpopulation)."
+        rule3 = "Any live cell with two or three live neighbors lives, unchanged, to the next generation."
+        rule4 = "Any dead cell with exactly three live neighbors will come to life in the next generation."
+        
+        t = Text(
+            content_frame, width=1, height=1, 
+            font="Helvetica 12", wrap='word',
+            highlightthickness=0, background=BG)
+        t.tag_configure("h1", font=("Helvetica", 24, "bold"), foreground="#e0e0e0",
+            spacing1=20, spacing3=12)
+        t.tag_configure("p",      font=("Helvetica", 14), lmargin1=10, lmargin2=10)
+        t.tag_configure("bold",   font=("Helvetica", 14, "bold"))
+        t.tag_configure("italic", font=("Helvetica", 14, "italic"))
+        t.tag_configure("list",
+                        spacing1=10, spacing3=10,
+                        lmargin1=40, lmargin2=80, tabs=(80,))
+        t.tag_configure("li_num", font=("Helvetica", 16, "bold"), foreground="#0047ab")
+        t.tag_configure("li_txt", font=("Helvetica", 14))
+
+        def list_item(num: int | str, text: str, t: Text = t):
+            t.insert("end", f"{str(num)}.",   ("list", "li_num"))
+            t.insert("end", "\t",   "list")
+            t.insert("end", text + "\n", ("list", "li_txt"))
+
+        t.grid(row=1, column=0, padx=10, pady=10, sticky=(N,S,E,W))
+        content_frame.rowconfigure(1, weight=1)
+
+        # t.insert("end", "Explanation", "h1")
+        t.insert("end", explanation_string, "p")
+        t.insert("end", "Rules", "h1")
+        t.insert("end", rules_string, "p")
+        list_item(1, rule1)
+        list_item(2, rule2)
+        list_item(3, rule3)
+        list_item(4, rule4)
+
+
+    def build_compendium_panel(self):
+        pass
+        
+    
+    def open_about_panel(self):
+        self.abt_panel.show()
+
+    
+    def open_compendium(self):
+        pass
 
 
     def toggle_pause_play(self):
@@ -498,6 +622,50 @@ class GameOfLife(Tk):
         self.center_on_living()
 
 
+    def save_configuration(self):
+        configuration = self.board.get_state()
+        print(configuration)
+        name = self.config_name_entry.get().strip()
+        if not configuration:
+            self.log("Nothing to save — board is empty.")
+            return
+        if not name:
+            self.log("Please enter a name for the configuration.")
+            return
+
+        try:
+            with SAVE_FILE.open('r') as f:
+                saves = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            saves = {}
+
+        saves[name] = configuration
+        try:
+            with SAVE_FILE.open('w') as f:
+                json.dump(saves, f, indent=2, sort_keys=True)
+        except OSError as e:
+            self.log(f"Couldn't save: {e}")
+            return
+
+        self.log(f"Saved '{name}'.")
+
+    
+    def load_configuration(self, name):
+        saves = {}
+        try:
+            with SAVE_FILE.open('r') as f:
+                saves = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            self.log("Error loading file: {e}")
+            return
+        
+        if name not in saves:
+            self.log(f"Unable to load - configuration {name} not found.")
+            return
+        
+        self.board.draw_configuration(saves[name])
+
+
     def clear_log(self):
         self.log_text['state'] = 'normal'
         self.log_text.delete('1.0', END)
@@ -511,8 +679,8 @@ class GameOfLife(Tk):
         log_widget['state'] = 'normal'
         if route_print:
             print(*args, **kwargs)
-        if end is None:
-            end = '\n'
+        if 'end' not in kwargs:
+            kwargs['end'] = '\n'
         log_widget.insert(END, args[0] + kwargs['end'])
         log_widget.see('end')
         log_widget['state'] = 'disabled'
